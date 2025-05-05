@@ -1,0 +1,181 @@
+import os
+import gzip
+from Bio import SeqIO
+from Bio.Seq import Seq
+import pandas as pd
+
+# Step 1: Read DNA Sequences from all .fa.gz chromosome files
+def read_fasta_gz(folder_path):
+    genome = {}
+    fasta_files = sorted([f for f in os.listdir(folder_path) if f.endswith('.fa.gz')])
+    
+    for idx, filename in enumerate(fasta_files, start=1):
+        chrom_id = str(idx)
+        with gzip.open(os.path.join(folder_path, filename), "rt") as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                genome[chrom_id] = str(record.seq).upper()
+    return genome
+
+genome_folder = "dataset/dataset1/dna_chromosomes/"
+genome_data = read_fasta_gz(genome_folder)
+
+# Step 2: Parse all GFF3 files in a folder
+def parse_all_gff3(folder_path):
+    all_genes = []
+    for filename in sorted(os.listdir(folder_path)):
+        if filename.endswith('.gff3'):
+            chrom_id = filename.split('.')[-2].split('chromosome.')[-1]
+            file_path = os.path.join(folder_path, filename)
+            with open(file_path, 'r') as file:
+                for line in file:
+                    if line.startswith("#"):
+                        continue
+                    parts = line.strip().split('\t')
+                    if len(parts) != 9:
+                        continue
+                    chrom, _, feature_type, start, end, _, strand, _, attributes = parts
+                    if feature_type == "gene":
+                        gene_id = None
+                        for attr in attributes.split(';'):
+                            if attr.startswith("ID=") or attr.startswith("gene_id=") or "GeneID" in attr:
+                                gene_id = attr.split('=')[-1]
+                                break
+                        if gene_id:
+                            if gene_id.startswith("gene:"):
+                                gene_id = gene_id.replace("gene:", "")
+                            all_genes.append({
+                                'gene_id': gene_id,
+                                'chrom': chrom_id,
+                                'start': int(start),
+                                'end': int(end),
+                                'strand': strand
+                            })
+    return pd.DataFrame(all_genes)
+
+gff3_folder = "dataset/dataset1/gff3_files/"
+gene_annotations = parse_all_gff3(gff3_folder)
+
+# Step 3: Read GEO expression data
+def read_geo_expression(geo_file):
+    df = pd.read_csv(geo_file, sep='\t')
+    df.rename(columns={df.columns[0]: 'gene_id'}, inplace=True)
+    return df
+
+geo_file = "dataset/dataset1/geo_file/genes_to_alias_ids.tsv"
+geo_data = read_geo_expression(geo_file)
+
+# Step 4: Merge annotations and expression data
+merged = pd.merge(gene_annotations, geo_data, on='gene_id')
+
+# Step 5: Add gene DNA sequences to merged data
+def extract_sequence(row, genome):
+    chrom = row['chrom']
+    start = row['start']
+    end = row['end']
+    strand = row['strand']
+
+    if chrom not in genome:
+        return None
+
+    try:
+        seq = genome[chrom][start-1:end]
+        if strand == '-':
+            seq = str(Seq(seq).reverse_complement())
+        return seq
+    except:
+        return None
+
+merged['sequence'] = merged.apply(lambda row: extract_sequence(row, genome_data), axis=1)
+merged.dropna(subset=['sequence'], inplace=True)
+
+# Step 6: Save final dataset
+merged.to_csv("model.csv", index=False)
+print("model.csv saved successfully")
+
+
+df=pd.read_csv("model.csv")
+
+
+print(df.info())
+
+print(df.isnull().sum())
+
+
+
+df.drop_duplicates(subset='gene_id', inplace=True)
+
+
+
+
+df = df[df['sequence'].notnull() & (df['sequence'] != '')]
+
+df = df[df['sequence'].str.len() > 50]
+
+
+df['strand'] = df['strand'].map({'+': 1, '-': 0})
+
+
+
+import numpy as np
+def one_hot_encode(seq):
+    mapping = {
+        'A': [1, 0, 0, 0],
+        'C': [0, 1, 0, 0],
+        'G': [0, 0, 1, 0],
+        'T': [0, 0, 0, 1],
+        'N': [0, 0, 0, 0]
+    }
+    return [mapping.get(base.upper(), [0, 0, 0, 0]) for base in seq]
+
+# Apply to entire column and store as NumPy arrays
+df['onehot_sequence'] = df['sequence'].apply(one_hot_encode)
+
+# Example: Show one-hot of first sequence
+print(np.array(df['onehot_sequence'].iloc[0]))
+
+
+
+
+df['chrom'] = df['chrom'].astype(str)
+df['start'] = df['start'].astype(int)
+df['end'] = df['end'].astype(int)
+df['strand'] = df['strand'].astype(str)
+df['sequence'] = df['sequence'].astype(str)
+
+
+
+df.head()
+
+df.rename(columns={
+    'B73 Zm00001eb.1': 'gene_name_b73',
+    'Zm00001d027230': 'gene_id_4a',
+    'AGPv4_Zm00001d.2': 'gene_id_4b'
+}, inplace=True)
+df = df.drop(columns=['sequence'])
+
+
+
+df.rename(columns={"onehot_sequence":"Sequence"},inplace=True)
+
+
+
+max_len = max(len(seq) for seq in df["Sequence"])
+print("Maximum sequence length:", max_len)
+
+
+
+
+from sklearn.preprocessing import LabelEncoder
+
+label_cols = ['gene_id','gene_name_b73', 'gene_id_4a', 'gene_id_4b']
+for col in label_cols:
+    if col in df.columns:
+        le = LabelEncoder()
+        df[col] = le.fit_transform(df[col])
+
+# Save or return the cleaned numeric DataFrame
+df.to_csv("processed_data.csv", index=False)
+
+
+df1=pd.read_csv("processed_data.csv")
+
