@@ -64,3 +64,10 @@ class GeneExpressionTransformer(tf.keras.Model):
         for block in self.transformer_blocks:
             x = block(x)
         return self.final_dense(tf.reduce_mean(x, axis=1))  # [batch, output_dim]
+
+
+
+#use model like 
+model = GeneExpressionTransformer(seq_len=50000)
+output = model(input_tensor)  # input_tensor shape: [batch, 50000]
+
